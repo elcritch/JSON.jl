@@ -146,7 +146,14 @@ function parse_string{T<:AbstractString}(ps::ParserState{T}, leniant::Bool)
     s = ps.s
     e = ps.e
 
-    quote_char = (leniant && str[s] == '\'') ? '"' : '\''
+    quote_char = (leniant && str[s] == '\'') ? '\'' : '"' 
+    if leniant
+        @show(leniant, str[s], quote_char)
+    end
+    
+    if !leniant && quote_char != '\"'
+        _error("quote leniant? Eh?")
+    end
     
     if str[s] != quote_char
         _error("Missing opening string char", ps)
@@ -259,7 +266,7 @@ if VERSION < v"0.4.0-dev+3874"
     end
 end
 
-function parse_number{T<:AbstractString}(ps::ParserState{T})
+function parse_number{T<:AbstractString}(ps::ParserState{T}, leniant::Bool)
     str = ps.str
     p = ps.s
     e = ps.e
@@ -289,15 +296,16 @@ function parse_number{T<:AbstractString}(ps::ParserState{T})
             is_float = true
             p += 1
         end
-    elseif leniant && c=='I' || c=='N' 
-        evs = SubString(ps.str, p, e)
-        if evs == "NaN" # Looks like "NaN"
-            p += 3
-        elseif evs == "Inf" # Looks like "false"
-            p += 3
-        else
-            _error("Unrecognized number", ps)            
-        end
+    # elseif leniant && (c=='I' || c=='N')
+    #     println("leniant number")
+    #     evs = SubString(ps.str, p, e)
+    #     if evs == "NaN" # Looks like "NaN"
+    #         p += 3
+    #     elseif evs == "Inf" # Looks like "false"
+    #         p += 3
+    #     else
+    #         _error("Unrecognized number", ps)
+    #     end
     else
         _error("Unrecognized number", ps)
     end
@@ -346,6 +354,18 @@ function parse(str::AbstractString; ordered::Bool=false, leniant::Bool=false)
     len < 1 && return
     ordered && !_HAVE_DATASTRUCTURES && error("DataStructures package required for ordered parsing: try `Pkg.add(\"DataStructures\")`")
     parse_value(ParserState(str, pos, len), ordered, leniant)
+end
+
+# Allow post-fix options in the forms: "so!" or "single_ordered" or "os!", etc. 
+function _parse(str::AbstractString, opt::Tuple)
+    if opt |> isempty
+        parse(str)
+    else
+        # Check for options based on full word separated by '_' or single chars ending with '!'
+        opts = opt[1][end] != '!' ? split(opt[1], "_") : split(opt[1], "")
+        opts = [ c[1] for c in opts ]
+        parse(str, ordered ='o' in opts, leniant = 'l' in opts)
+    end
 end
 
 end #module Parser
