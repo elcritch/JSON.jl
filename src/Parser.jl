@@ -79,13 +79,13 @@ end
 
 # PARSING
 
-function parse_array{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, quote_char::Char)
+function parse_array{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, leniant::Bool)
     incr(ps) # Skip over the '['
     _array = TYPES[]
     chomp_space(ps)
     charat(ps)==']' && (incr(ps); return _array) # Check for empty array
     while true # Extract values from array
-        v = parse_value(ps, ordered, quote_char) # Extract value
+        v = parse_value(ps, ordered, leniant) # Extract value
         push!(_array, v)
         # Eat up trailing whitespace
         chomp_space(ps)
@@ -103,23 +103,23 @@ function parse_array{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, quote
     return _array
 end
 
-function parse_object{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, quote_char::Char)
+function parse_object{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, leniant::Bool)
     if ordered
-        parse_object(ps, ordered, quote_char, OrderedDict{KEY_TYPES,TYPES}())
+        parse_object(ps, ordered, leniant, OrderedDict{KEY_TYPES,TYPES}())
     else
-        parse_object(ps, ordered, quote_char, Dict{KEY_TYPES,TYPES}())
+        parse_object(ps, ordered, leniant, Dict{KEY_TYPES,TYPES}())
     end
 end
 
-function parse_object{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, quote_char::Char, obj)
+function parse_object{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, leniant::Bool, obj)
     incr(ps) # Skip over opening '{'
     chomp_space(ps)
     charat(ps)=='}' && (incr(ps); return obj) # Check for empty object
     while true
         chomp_space(ps)
-        _key = parse_string(ps, quote_char)           # Key
+        _key = parse_string(ps, leniant)           # Key
         skip_separator(ps)
-        _value = parse_value(ps, ordered, quote_char) # Value
+        _value = parse_value(ps, ordered, leniant) # Value
         obj[_key] = _value                             # Building object
         chomp_space(ps)
         c = charat(ps) # Find the next pair or end of object
@@ -141,12 +141,17 @@ utf16_get_supplementary(lead::Uint16, trail::Uint16) = @compat(Char(@compat(UInt
 
 # TODO: Try to find ways to improve the performance of this (currently one
 #       of the slowest parsing methods).
-function parse_string{T<:AbstractString}(ps::ParserState{T}, quote_char::Char)
+function parse_string{T<:AbstractString}(ps::ParserState{T}, leniant::Bool)
     str = ps.str
     s = ps.s
     e = ps.e
 
-    str[s] == quote_char || _error("Missing opening string char", ps)
+    quote_char = (leniant && str[s] == '\'') ? '"' : '\''
+    
+    if str[s] != quote_char
+        _error("Missing opening string char", ps)
+    end
+    
     s = nextind(str, s) # Skip over opening quote_char '"'
     b = IOBuffer()
     found_end = false
@@ -216,21 +221,27 @@ function parse_simple{T<:AbstractString}(ps::ParserState{T})
     ret
 end
 
-function parse_value{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, quote_char::Char)
+function parse_value{T<:AbstractString}(ps::ParserState{T}, ordered::Bool, leniant::Bool)
     chomp_space(ps)
+    
     (ps.s > ps.e) && return nothing # Nothing left
 
     ch = charat(ps)
-    if ch == quote_char
-        ret = parse_string(ps, quote_char)
+    
+    if ch == '"' || (leniant && '\'')
+        ret = parse_string(ps, leniant)
     elseif ch == '{'
-        ret = parse_object(ps, ordered, quote_char)
-    elseif (ch >= '0' && ch <= '9') || ch=='-' || ch=='+'
-        ret = parse_number(ps)
+        ret = parse_object(ps, ordered, leniant)
+    elseif (ch >= '0' && ch <= '9') || ch=='-' || ch=='+' 
+        ret = parse_number(ps, leniant)
+    elseif leniant && ch=='I' || ch=='N'
+        ret = parse_number(ps, leniant)
     elseif ch == '['
-        ret = parse_array(ps, ordered, quote_char)
+        ret = parse_array(ps, ordered, leniant)
     elseif ch == 'f' || ch == 't' || ch == 'n'
         ret = parse_simple(ps)
+    elseif leniant
+        
     else
         _error("Unknown value", ps)
     end
@@ -260,6 +271,7 @@ function parse_number{T<:AbstractString}(ps::ParserState{T})
         (p <= e) ? (c = str[p]) : _error("Unrecognized number", ps)  # Something must follow a sign
     end
 
+
     if c == '0' # If number begins with 0, it must be int(0) or a floating point
         p += 1
         if p <= e
@@ -276,6 +288,15 @@ function parse_number{T<:AbstractString}(ps::ParserState{T})
         if (p <= e) && (c == '.')
             is_float = true
             p += 1
+        end
+    elseif leniant && c=='I' || c=='N' 
+        evs = SubString(ps.str, p, e)
+        if evs == "NaN" # Looks like "NaN"
+            p += 3
+        elseif evs == "Inf" # Looks like "false"
+            p += 3
+        else
+            _error("Unrecognized number", ps)            
         end
     else
         _error("Unrecognized number", ps)
@@ -318,13 +339,13 @@ function parse_number{T<:AbstractString}(ps::ParserState{T})
     end
 end
 
-function parse(str::AbstractString; ordered::Bool=false, single_quote::Bool=false)
+
+function parse(str::AbstractString; ordered::Bool=false, leniant::Bool=false)
     pos::Int = 1
     len::Int = endof(str)
-    quote_char::Char = single_quote ? '\'' : '\"'
     len < 1 && return
     ordered && !_HAVE_DATASTRUCTURES && error("DataStructures package required for ordered parsing: try `Pkg.add(\"DataStructures\")`")
-    parse_value(ParserState(str, pos, len), ordered, quote_char)
+    parse_value(ParserState(str, pos, len), ordered, leniant)
 end
 
 end #module Parser
